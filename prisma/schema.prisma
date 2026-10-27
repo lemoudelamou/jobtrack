@@ -1,0 +1,392 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum JobStatus {
+  Wishlist
+  Applied
+  Interview
+  Offer
+  Rejected
+}
+
+model Job {
+  id          Int       @id @default(autoincrement())
+  company     String
+  position    String
+  location    String
+  status      JobStatus
+  appliedDate DateTime  @default(now())
+
+  jobUrl String?
+  salary String?
+  notes  String?
+
+  interviewDate     DateTime?
+  interviewTime     String?
+  interviewType     String?
+  interviewLocation String?
+  interviewNotes    String?
+
+  insight JobInsight?
+  posting JobPosting?
+  tailoredCv JobCvTailoring?
+  adNotes    JobAdNotes?
+  statusSuggestions StatusSuggestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+
+  sessionVersion Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs     Job[]
+  resume   Resume?
+  accounts Account[]
+  sessions Session[]
+
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  passkeys                Passkey[]
+
+  searchProfile JobSearchProfile?
+  mailAccounts      MailAccount[]
+  statusSuggestions StatusSuggestion[]
+  jobLeads      JobLead[]
+}
+
+model Account {
+  id                String @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token String? @db.Text
+  access_token  String? @db.Text
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+  id_token      String? @db.Text
+  session_state String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Resume {
+  id       Int    @id @default(autoincrement())
+  fileName String
+  text     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chunks ResumeChunk[]
+}
+
+model ResumeChunk {
+  id         Int    @id @default(autoincrement())
+  resumeId   Int
+  content    String
+  chunkIndex Int
+
+  // pgvector column (1536 dims, gemini-embedding-001). Written and read
+  // with raw SQL in app/api/resume and lib/search-resume.ts.
+  embedding Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now())
+
+  resume Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  @@index([resumeId])
+}
+
+model LoginAttempt {
+  id       Int      @id @default(autoincrement())
+  key      String
+  failedAt DateTime @default(now())
+
+  @@index([key, failedAt])
+}
+
+model EmailVerificationToken {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Passkey {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  credentialId String @unique @db.Text
+  publicKey    String @db.Text
+
+  counter Int @default(0)
+
+  deviceType String?
+  backedUp   Boolean @default(false)
+
+  transports String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model PasskeyChallenge {
+  id        String   @id @default(cuid())
+  challenge String   @unique
+  purpose   String
+  userId    String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Job radar: daily job leads from Adzuna and Arbeitnow, ranked
+// against the user's CV with pgvector. Queried with raw SQL in lib/radar.
+// ---------------------------------------------------------------------------
+
+model JobSearchProfile {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  keywords   String
+  location   String  @default("")
+  radiusKm   Int     @default(25)
+  remoteOnly Boolean @default(false)
+  visaOnly   Boolean @default(false)
+  // any | student | junior | mid | senior
+  experienceLevel String @default("any")
+  // both | search | alerts (see lib/radar/sources.ts)
+  sourceMode      String @default("both")
+
+  lastRunAt    DateTime?
+  lastRunError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum JobLeadStatus {
+  New
+  Saved
+  Dismissed
+}
+
+model JobLead {
+  id         Int    @id @default(autoincrement())
+  userId     String
+  source     String
+  externalId String
+
+  title       String
+  company     String?
+  location    String?
+  salary      String?
+  url         String
+  publishedAt DateTime?
+  description String?
+
+  // gemini-embedding-001 at 1536 dims, same space as ResumeChunk.embedding
+  embedding Unsupported("vector(1536)")?
+
+  /// Similarity to the CV mapped to 0-100.
+  score       Float?
+  summary     String?
+  strengths   String[]  @default([])
+  gaps        String[]  @default([])
+  explainedAt DateTime?
+
+  status JobLeadStatus @default(New)
+  jobId  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, source, externalId])
+  @@index([userId, status, score])
+}
+
+// Saved AI insights for one application, so viewing it again doesn't call
+// the AI. jobHash / resumeAt record what they were based on, to flag them
+// as outdated when the job details or the CV change.
+model JobInsight {
+  id        Int      @id @default(autoincrement())
+  jobId     Int      @unique
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  content   String
+  jobHash   String
+  resumeAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// The job ad text captured with "Save to JobTrack" (or an alert email), kept
+// apart from Job so board lists stay light. AI insights read it when present.
+model JobPosting {
+  id          Int      @id @default(autoincrement())
+  jobId       Int      @unique
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  description String
+  source      String   @default("")
+  createdAt   DateTime @default(now())
+}
+
+// Read-only access to the user's mailboxes (several Gmail and Outlook accounts):
+// job alert emails for the radar, and company replies for status suggestions.
+// refreshToken is encrypted (AES-256-GCM, key derived from AUTH_SECRET).
+model MailAccount {
+  id           Int       @id @default(autoincrement())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     String // "gmail" | "outlook"
+  email        String
+  refreshToken String // encrypted (lib/secret-box)
+  // Job alert emails for the radar (Gmail).
+  lastSyncAt   DateTime?
+  lastError    String?
+  // Company replies -> status suggestions.
+  inboxSyncAt  DateTime?
+  inboxError   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, provider, email])
+  @@index([userId])
+}
+
+// A status change suggested from a company's email ("Leider müssen wir…" ->
+// Rejected). Applied only when the user confirms. messageKey (the email's
+// Message-ID) keeps the same email in two inboxes from being suggested twice.
+model StatusSuggestion {
+  id           Int       @id @default(autoincrement())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId        Int?
+  job          Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messageKey   String
+  kind         String // "applied" | "interview" | "rejected" | "offer"
+  accountEmail String
+  fromName     String
+  fromAddress  String
+  subject      String
+  snippet      String
+  receivedAt   DateTime
+  interviewAt  DateTime?
+  interviewTime String?
+  interviewType String?
+  matchScore   Int       @default(0)
+  // For replies about jobs not on the board ("Add to board"): read from the email.
+  companyGuess  String    @default("")
+  positionGuess String    @default("")
+  // The earliest email about this application (e.g. the confirmation before a rejection).
+  appliedAt     DateTime?
+  state        String    @default("pending") // "pending" | "accepted" | "dismissed"
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, messageKey])
+  @@index([userId, state])
+}
+
+// "Tailor my CV for this job": AI-suggested edits to the user's CV for one
+// application, saved so reopening the job doesn't call the AI again.
+// data is JSON (see lib/ai/tailor/types.ts). jobHash / resumeAt flag it as
+// outdated when the job details or the CV change.
+model JobCvTailoring {
+  id        Int      @id @default(autoincrement())
+  jobId     Int      @unique
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  data      String
+  jobHash   String
+  resumeAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// AI notes extracted from the job ad (JobPosting), one row per application.
+// adHash = fingerprint of the ad text they were made from.
+model JobAdNotes {
+  id        Int      @id @default(autoincrement())
+  jobId     Int      @unique
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  data      String
+  adHash    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
